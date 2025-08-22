@@ -1,10 +1,9 @@
 import sys, time, struct, serial
-from PyQt6.QtWidgets import *
-from PyQt6.QtGui import *
 from PyQt6 import uic
-from PyQt6.QtCore import *
+from PyQt6.QtCore import * 
+from PyQt6.QtWidgets import *
 
-from_class = uic.loadUiType("src/GUI/study_env.ui")[0]
+from_class = uic.loadUiType("temp_humid.ui")[0]
 
 # 실수(℃)를 0.1℃ 단위 정수로 ex) 28.3℃ → 283
 def i10(v: float) -> int:
@@ -193,14 +192,3 @@ if __name__ == "__main__":
     w.setWindowTitle("Temp/Humid Controller")
     w.show()
     sys.exit(app.exec())
-
-
-class NextWindow(QMainWindow, from_class):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            try:
-                parent.close()
-            except Exception:
-                pass
-        self.setupUi(self)
