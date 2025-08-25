@@ -16,17 +16,17 @@ class WindowClass(QMainWindow, from_class):
         self.setupUi(self)
 
         self.uid = bytes(4)
-        self.conn = serial.Serial(port = "/dev/ttyACM0", baudrate = 9600, timeout = 1)
+        self.conn = serial.Serial(port = "/dev/ttyACM1", baudrate = 9600, timeout = 1)
         self.recv = Receiver(self.conn) # Gui 시작 시 스레드 시작
         self.recv.start()
 
-        self.brightSavedValue = 50
-        self.blindSavedValue = 45
-        self.windowSavedValue = 45
+        self.brightSavedValue = 50 #정보가 저장되어야 하는 값
+        self.blindSavedValue = 45 #정보가 저장되어야 하는 값
+        self.windowSavedValue = 45 #정보가 저장되어야 하는 값
 
-        self.initBright = 0
-        self.initBlindAngle = 0
-        self.initWindowAngle = 0
+        self.initBright = 0 # 조명 초기화 값
+        self.initBlindAngle = 0 # 블라인드 초기화 값
+        self.initWindowAngle = 0 # 창문 초기화 값
 
         bright_min = self.brightSlider.minimum()
         bright_max = self.brightSlider.maximum()
@@ -73,7 +73,7 @@ class WindowClass(QMainWindow, from_class):
         self.windowConditioningModeBtn.clicked.connect(self.windowConditioningModeControl)
         self.windowCloseBtn.clicked.connect(self.windowCloseControl)
 
-    def initSettings(self):
+    def initSettings(self): # 등화, 서보모터 초기 설정
         if self.isInit == True:
             self.brightControl()
             time.sleep(2)
@@ -83,15 +83,15 @@ class WindowClass(QMainWindow, from_class):
             self.windowConditioningModeControl()
             self.isInit = False
 
-    def brightOffControl(self):
+    def brightOffControl(self): # 조명 끄기
         self.isBrightOffControl = True
         self.brightControl()
 
-    def brightSavedSetControl(self):
+    def brightSavedSetControl(self): # 저장된 설정으로 조명 작동
         self.isBrightSavedSetControl = True
         self.brightControl()
 
-    def brightControl(self):
+    def brightControl(self): # 조명 작동
         if (self.isInit == True) or (self.isBrightOffControl == True):
             set_value = self.brightSlider.minimum()
             self.brightSlider.setValue(set_value)
@@ -104,6 +104,7 @@ class WindowClass(QMainWindow, from_class):
 
         else:
             set_value = self.brightSlider.value()
+            self.brightSavedValue = set_value
 
         self.labelBrightPct.setText(str(set_value) + " %")
 
@@ -111,15 +112,15 @@ class WindowClass(QMainWindow, from_class):
 
         self.conn.write(set_value_string.encode())
 
-    def blindSavedSetControl(self):
+    def blindSavedSetControl(self): # 저장된 설정으로 블라인드 작동 
         self.isBlindSavedSetControl = True
         self.blindControl()
 
-    def blindCloseControl(self):
+    def blindCloseControl(self): # 블라인드 닫기
         self.isBlindOffControl = True
         self.blindControl()
 
-    def blindControl(self):
+    def blindControl(self): # 블라인드 작동
         if (self.isInit == True) or (self.isBlindOffControl == True):
             set_value = self.initBlindAngle
             self.blindDial.setValue(set_value)
@@ -130,6 +131,7 @@ class WindowClass(QMainWindow, from_class):
             self.isBlindSavedSetControl = False
         else:
             set_value = self.blindDial.value()
+            self.blindSavedValue = set_value
 
         self.labelBlindDeg.setText(str(set_value) + " Deg")
 
@@ -137,11 +139,11 @@ class WindowClass(QMainWindow, from_class):
 
         self.conn.write(set_value_string.encode())
 
-    def windowCloseControl(self):
+    def windowCloseControl(self): # 창문 닫기
         self.isWindowCloseControl = True    
         self.windowControl()
 
-    def windowConditioningModeControl(self):
+    def windowConditioningModeControl(self): # 창문 환기모드
         if self.isWindowConditioningModeControl == False:
             if self.isInit == True:
                 self.windowConditioningModeBtn.setText("환기 모드 실행")
@@ -162,7 +164,7 @@ class WindowClass(QMainWindow, from_class):
             self.windowCloseBtn.setEnabled(True)
             self.isWindowConditioningModeControl = False
 
-    def windowControl(self):
+    def windowControl(self): # 창문 작동
         if (self.isInit == True) or (self.isWindowCloseControl == True):
             set_value = self.initWindowAngle
             self.windowDial.setValue(set_value)
