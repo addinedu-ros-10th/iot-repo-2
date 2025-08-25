@@ -15,7 +15,8 @@ PORT_PRESENCE = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_1262
 BAUD = 9600
 
 # ===== UI 로드(동일 폴더) =====
-from_class = uic.loadUiType("/home/geonchang/dev_ws/iot-repo-2/src/GUI/study_env.ui")[0]
+#from_class = uic.loadUiType("/home/geonchang/dev_ws/iot-repo-2/src/GUI/study_env.ui")[0]
+from_class = uic.loadUiType("/home/dj/dev_ws/iot_project/src/GUI/study_env.ui")[0]
 
 def i10(v: float) -> int:
     return int(round(float(v)*10.0))
@@ -180,9 +181,66 @@ class NextWindow(QMainWindow, from_class):
         self.label_14.setStyleSheet("font-size: 24px; padding: 10px; color: black;font-weight: bold")
         self.label_15.setStyleSheet("color: black;font-weight: bold")
 
+        # +++ 조명/창문 작동 패러미터 +++
+        self.brightSavedValue = 50 #정보가 저장되어야 하는 값
+        self.blindSavedValue = 45 #정보가 저장되어야 하는 값
+        self.windowSavedValue = 45 #정보가 저장되어야 하는 값
+
+        self.initBright = 0 # 조명 초기화 값
+        self.initBlindAngle = 0 # 블라인드 초기화 값
+        self.initWindowAngle = 0 # 창문 초기화 값
+
+        bright_min = self.brightSlider.minimum()
+        bright_max = self.brightSlider.maximum()
+        bright_step = self.brightSlider.singleStep()
+
+        blind_min = self.blindDial.minimum()
+        blind_max = self.blindDial.maximum()
+        blind_step = self.blindDial.singleStep()
+
+        window_min = self.windowDial.minimum()
+        window_max = self.windowDial.maximum()
+        window_step = self.windowDial.singleStep()
+
+        self.isInit = True
+        self.isBrightSavedSetControl = False
+        self.isBrightOffControl = False
+
+        self.isBlindSavedSetControl = False
+        self.isBlindOffControl = False
+
+        self.isWindowCloseControl = False
+        self.isWindowConditioningModeControl = False
+
+        self.brightSlider.setRange(bright_min, bright_max)
+        self.brightSlider.setSingleStep(bright_step)
+
+        self.blindDial.setRange(blind_min, blind_max)
+        self.blindDial.setSingleStep(blind_step)
+
+        self.windowDial.setRange(window_min, window_max)
+        self.windowDial.setSingleStep(window_step)
+
+        self.brightSlider.valueChanged.connect(self.brightControl)
+        self.brightSetSavedBtn.clicked.connect(self.brightSavedSetControl)
+        self.brightOffBtn.clicked.connect(self.brightOffControl)
+
+        self.blindDial.valueChanged.connect(self.blindControl)
+        self.blindSetSavedBtn.clicked.connect(self.blindSavedSetControl)
+        self.blindOffBtn.clicked.connect(self.blindCloseControl)
+        
+        self.windowDial.valueChanged.connect(self.windowControl)
+        self.windowConditioningModeBtn.clicked.connect(self.windowConditioningModeControl)
+        self.windowCloseBtn.clicked.connect(self.windowCloseControl)
+        # +++ 조명/창문 작동 패러미터 +++
 
         self.conn = \
-            serial.Serial(port= "/dev/ttyACM0", baudrate= 9600 , timeout=1)
+            serial.Serial(port= "/dev/ttyACM0", baudrate= 9600 , timeout=1) # 근접센서용 
+        
+        self.conn_bw = \
+            serial.Serial(port= "/dev/ttyACM1", baudrate= 9600 , timeout=1) # 조명/창문 조정용
+        
+        self.initSettings()
         
         # === QTimer 설정 (0.5초마다 아두이노 데이터 확인) ===
         self.timer = QTimer()
@@ -401,6 +459,113 @@ class NextWindow(QMainWindow, from_class):
                     pass
         finally:
             super().closeEvent(e)
+
+    # +++ 조명/창문 작동 함수 일람 +++
+    def initSettings(self): # 등화, 서보모터 초기 설정
+        if self.isInit == True:
+            self.brightControl()
+            time.sleep(2)
+            self.blindControl()
+            time.sleep(2)
+            self.windowControl()
+            self.windowConditioningModeControl()
+            self.isInit = False
+
+    def brightOffControl(self): # 조명 끄기
+        self.isBrightOffControl = True
+        self.brightControl()
+
+    def brightSavedSetControl(self): # 저장된 설정으로 조명 작동
+        self.isBrightSavedSetControl = True
+        self.brightControl()
+
+    def brightControl(self): # 조명 작동
+        if (self.isInit == True) or (self.isBrightOffControl == True):
+            set_value = self.brightSlider.minimum()
+            self.brightSlider.setValue(set_value)
+            self.isBrightOffControl = False
+
+        elif self.isBrightSavedSetControl == True:
+            set_value = self.brightSavedValue
+            self.brightSlider.setValue(set_value)
+            self.isBrightSavedSetControl = False
+
+        else:
+            set_value = self.brightSlider.value()
+            self.brightSavedValue = set_value
+
+        self.labelBrightPct.setText(str(set_value) + " %")
+
+        set_value_string = "la" + str(set_value) + "\n"
+
+        self.conn_bw.write(set_value_string.encode())
+
+    def blindSavedSetControl(self): # 저장된 설정으로 블라인드 작동 
+        self.isBlindSavedSetControl = True
+        self.blindControl()
+
+    def blindCloseControl(self): # 블라인드 닫기
+        self.isBlindOffControl = True
+        self.blindControl()
+
+    def blindControl(self): # 블라인드 작동
+        if (self.isInit == True) or (self.isBlindOffControl == True):
+            set_value = self.initBlindAngle
+            self.blindDial.setValue(set_value)
+            self.isBlindOffControl = False
+        elif self.isBlindSavedSetControl == True:
+            set_value = self.blindSavedValue
+            self.blindDial.setValue(set_value)
+            self.isBlindSavedSetControl = False
+        else:
+            set_value = self.blindDial.value()
+            self.blindSavedValue = set_value
+
+        self.labelBlindDeg.setText(str(set_value) + " Deg")
+
+        set_value_string = "wa" + str(set_value) + "\n"
+
+        self.conn_bw.write(set_value_string.encode())
+
+    def windowCloseControl(self): # 창문 닫기
+        self.isWindowCloseControl = True    
+        self.windowControl()
+
+    def windowConditioningModeControl(self): # 창문 환기모드
+        if self.isWindowConditioningModeControl == False:
+            if self.isInit == True:
+                self.windowConditioningModeBtn.setText("환기 모드 실행")
+            else:
+                self.windowConditioningModeBtn.setText("환기 모드 중지")
+                self.conn_bw.write("wo".encode())
+                self.labelWindowDeg.setDisabled(True)
+                self.windowDial.setDisabled(True)
+                self.windowCloseBtn.setDisabled(True)
+                self.conn_bw.write("wc\n".encode())
+                self.isWindowConditioningModeControl = True
+        else:
+            self.windowConditioningModeBtn.setText("환기 모드 실행")
+            self.conn_bw.write("wf".encode())
+            self.windowCloseControl()
+            self.labelWindowDeg.setEnabled(True)
+            self.windowDial.setEnabled(True)
+            self.windowCloseBtn.setEnabled(True)
+            self.isWindowConditioningModeControl = False
+
+    def windowControl(self): # 창문 작동
+        if (self.isInit == True) or (self.isWindowCloseControl == True):
+            set_value = self.initWindowAngle
+            self.windowDial.setValue(set_value)
+            self.isWindowCloseControl = False
+        else:
+            set_value = self.windowDial.value()
+
+        self.labelWindowDeg.setText(str(set_value) + " Deg")
+
+        set_value_string = "wb" + str(set_value) + "\n"
+
+        self.conn_bw.write(set_value_string.encode())
+    # +++ 조명/창문 작동 함수 일람 +++
 
 # ===== main =====
 if __name__ == "__main__":
