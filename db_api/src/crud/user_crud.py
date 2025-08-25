@@ -14,3 +14,6 @@ def get_users(db: Session, limit: int = 100):
 
 def get_user_by_uid(db: Session, uid:bytes):
     return db.query(user_model.User).filter(user_model.User.uid == uid).first()
+
+def get_user_setting_by_name(db: Session, name:str):
+    return db.query(user_model.UserSetting).filter(user_model.UserSetting.name == name).first()

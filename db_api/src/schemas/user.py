@@ -47,3 +47,11 @@ class userSearch(BaseModel):
         if isinstance(v, bytes):
             return v
         raise TypeError("uid는 헥사(hex) 문자열이나 byte여야 합니다.")
+    
+class userSetting(BaseModel):
+    window: int
+    blind: int
+    bright: int
+    
+    class Config:
+        from_attributes = True

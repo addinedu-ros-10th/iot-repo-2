@@ -58,3 +58,10 @@ def read_user_by_uid(uid: str = Query(...), db: Session=Depends(get_db)):
             }
         )
     return result
+
+@router.get("/users/setting/{name}", response_model=user_schema.userSetting, tags=["Users"])
+def read_user_setting(name: str, db: Session = Depends(get_db)):
+    db_user_setting = user_crud.get_user_setting_by_name(db, name=name)
+    if db_user_setting is None:
+        raise HTTPException(status_code=404, detail="User setting not found")
+    return db_user_setting
