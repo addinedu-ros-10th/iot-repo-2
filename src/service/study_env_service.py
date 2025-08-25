@@ -76,7 +76,6 @@ class ReceiverEnv(QThread):
 
             cmd = res[:2].decode(errors="ignore")
             st  = res[2]
-
             if cmd == 'RD' and st == STATUS_OK and len(res) >= 7:
                 t10 = int.from_bytes(res[3:5], 'little', signed=True)
                 h10 = int.from_bytes(res[5:7], 'little', signed=True)
