@@ -7,7 +7,7 @@ from PyQt6.QtCore import *
 import serial
 import struct
 
-from_class = uic.loadUiType("/home/qatest/iot-repo-2/src/GUI/lying.ui")[0]
+from_class = uic.loadUiType("/home/geonchang/dev_ws/iot-repo-2/src/GUI/lying.ui")[0]
 
 class windowclass (QMainWindow, from_class):
 
