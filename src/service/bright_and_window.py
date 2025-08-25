@@ -8,7 +8,7 @@ from PyQt6.QtGui import *
 from PyQt6 import uic
 from PyQt6.QtCore import *
 
-from_class = uic.loadUiType("src/GUI/bright_and_window.ui")[0]
+from_class = uic.loadUiType("GUI/bright_and_window.ui")[0]
 
 class WindowClass(QMainWindow, from_class):
     def __init__(self):

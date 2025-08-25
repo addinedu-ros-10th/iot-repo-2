@@ -256,7 +256,7 @@
      </rect>
     </property>
     <property name="text">
-     <string>끄기</string>
+     <string>닫기</string>
     </property>
    </widget>
    <widget class="QPushButton" name="windowCloseBtn">
