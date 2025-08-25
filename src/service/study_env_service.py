@@ -7,11 +7,15 @@ from PyQt6.QtGui import *
 # ===== 고정 포트 경로 =====
 PORT_ENV      = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266422712165-if00"  # (원래 PRES)
 PORT_PRESENCE = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266417512681-if00"  # (원래 ENV)
+# PORT_ENV      = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12424551266429728000-if00"  # (lying)
+# PORT_PRESENCE = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12424551266429728000-if00"  # (lying)
+
+
 
 BAUD = 9600
 
 # ===== UI 로드(동일 폴더) =====
-from_class = uic.loadUiType("study_env.ui")[0]
+from_class = uic.loadUiType("/home/geonchang/dev_ws/iot-repo-2/src/GUI/study_env.ui")[0]
 
 def i10(v: float) -> int:
     return int(round(float(v)*10.0))
@@ -166,6 +170,28 @@ class NextWindow(QMainWindow, from_class):
         self.spinAC        = self._el(QDoubleSpinBox, "spinAC", "doubleSpinBoxAC")
         self.spinHeat      = self._el(QDoubleSpinBox, "spinHeat", "doubleSpinBoxHeat")
 
+        self.label_13.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_14.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_15.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_16.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.groupBox_5.setStyleSheet("color: black")
+        self.label_13.setStyleSheet("color: black; font-weight: bold ")
+        self.label_14.setStyleSheet("font-size: 24px; padding: 10px; color: black;font-weight: bold")
+        self.label_15.setStyleSheet("color: black;font-weight: bold")
+
+
+        self.conn = \
+            serial.Serial(port= "/dev/ttyACM0", baudrate= 9600 , timeout=1)
+        
+        # === QTimer 설정 (0.5초마다 아두이노 데이터 확인) ===
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.read_sensor_data)
+        self.timer.start(50)
+
+
+
+
         # 초기 UI 상태
         self.time_fmt = "HH:mm:ss"
         self.absent_start_dt = None
@@ -230,6 +256,24 @@ class NextWindow(QMainWindow, from_class):
             QTimer.singleShot(600, lambda: self.send_env('RH'))
 
     # ---- 내부 유틸 ----
+    def read_sensor_data(self):
+        """아두이노에서 센서값과 부저 상태 읽어서 라벨에 표시"""
+        if self.conn.in_waiting > 0:
+            try:
+                data = self.conn.readline().decode('utf-8').strip()
+                if "," in data:
+                    sensor_val, buzzer_val = data.split(",")
+                    self.label_14.setText(f"{sensor_val}")
+                    if buzzer_val == "1":
+                        self.label_16.setText("On")
+                        self.label_16.setStyleSheet("font-size: 24px; color: red;font-weight: bold")
+                    else:
+                        self.label_16.setText("Off")
+                        self.label_16.setStyleSheet("font-size: 24px; color: black;font-weight: bold")
+            except Exception as e:
+                print("데이터 읽기 오류:", e)
+
+
     def _el(self, cls, *names):
         for n in names:
             w = getattr(self, n, None) or self.findChild(cls, n)
