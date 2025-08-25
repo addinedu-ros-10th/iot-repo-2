@@ -4,6 +4,8 @@ from PyQt6.QtCore import *
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
 
+import requests
+
 # ===== 고정 포트 경로 =====
 PORT_ENV      = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266422712165-if00"  # (원래 PRES)
 PORT_PRESENCE = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266417512681-if00"  # (원래 ENV)
@@ -32,6 +34,23 @@ STYLE_ABSENT = (
     "QLabel{background:#fbbf24;color:#111;border-radius:24px;"
     "padding:16px 24px;font-weight:800;font-size:48px;}"
 )
+
+class APIRecv(QThread):
+    setting_value = pyqtSignal(dict)
+
+    def __init__(self, user_name):
+        super().__init__()
+        self.user_name = user_name
+
+    def run(self):
+        try:
+            api_url = f"http://127.0.0.1:8000/users/setting/{self.user_name}"
+
+            response = requests.get(api_url, timeout=10)
+            print(response.json())
+
+        except Exception as e:
+            print(f"Error : {e}")
 
 # ===== ENV(바이너리 프레임) 리더 =====
 class ReceiverEnv(QThread):
