@@ -1,24 +1,38 @@
-import sys, time, struct, serial
+import sys, time, struct, serial, json
+from PyQt6 import uic, QtCore
+from PyQt6.QtCore import * 
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
-from PyQt6 import uic
-from PyQt6.QtCore import *
 
-from_class = uic.loadUiType("src/GUI/study_env.ui")[0]
+# ===== 고정 포트 경로 =====
+PORT_ENV      = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266422712165-if00"  # (원래 PRES)
+PORT_PRESENCE = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266417512681-if00"  # (원래 ENV)
 
-# 실수(℃)를 0.1℃ 단위 정수로 ex) 28.3℃ → 283
+BAUD = 9600
+
+# ===== UI 로드(동일 폴더) =====
+from_class = uic.loadUiType("study_env.ui")[0]
+
 def i10(v: float) -> int:
     return int(round(float(v)*10.0))
 
-# STATUS 코드
 STATUS_OK        = 0x00
 STATUS_READ_FAIL = 0x01
 
-# 수신 Thread
-class Receiver(QThread):
-    data   = pyqtSignal(float, float)   # RD
-    thr    = pyqtSignal(str, float)     # RF/RA/RH
-    status = pyqtSignal(str, int)       # 기타
+STYLE_PRESENT = (
+    "QLabel{background:#10b981;color:#fff;border-radius:24px;"
+    "padding:16px 24px;font-weight:800;font-size:48px;}"
+)
+STYLE_ABSENT = (
+    "QLabel{background:#fbbf24;color:#111;border-radius:24px;"
+    "padding:16px 24px;font-weight:800;font-size:48px;}"
+)
+
+# ===== ENV(바이너리 프레임) 리더 =====
+class ReceiverEnv(QThread):
+    data   = pyqtSignal(float, float)   # t, h
+    thr    = pyqtSignal(str, float)     # 'RF'/'RA'/'RH', value
+    status = pyqtSignal(str, int)
 
     def __init__(self, conn, parent=None):
         super().__init__(parent)
@@ -26,105 +40,234 @@ class Receiver(QThread):
         self._run = True
 
     def stop(self): self._run = False
-    
+
+    def _readline_safe(self) -> bytes:
+        """read_until 대체: 항상 read(1)로 '\n'까지 모아서 반환"""
+        if self.conn is None or not getattr(self.conn, "is_open", False):
+            return b""
+        buf = bytearray()
+        try:
+            while self._run and self.conn and self.conn.is_open:
+                b1 = self.conn.read(1)  # size=1 고정 → pyserial 내부 size=None 경로 회피
+                if not b1:
+                    continue  # timeout
+                buf += b1
+                if b1 == b'\n':
+                    break
+        except (serial.SerialException, OSError, TypeError):
+            return b""
+        return bytes(buf)
+
     def run(self):
         while self._run:
-            res = self.conn.read_until(b'\n')
+            if self.conn is None or not getattr(self.conn, "is_open", False):
+                break
+
+            res = self._readline_safe()
             if not res:
                 continue
-            if res.endswith(b'\r\n'): res = res[:-2]
-            elif res.endswith(b'\n'): res = res[:-1]
+
+            if res.endswith(b'\r\n'):
+                res = res[:-2]
+            elif res.endswith(b'\n'):
+                res = res[:-1]
             if len(res) < 3:
                 continue
 
             cmd = res[:2].decode(errors="ignore")
             st  = res[2]
-            
-            # RD 응답: temp:int16 + humid:int16(LE, 0.1단위)를 받아 **실수(℃, %)**로 변환
             if cmd == 'RD' and st == STATUS_OK and len(res) >= 7:
                 t10 = int.from_bytes(res[3:5], 'little', signed=True)
                 h10 = int.from_bytes(res[5:7], 'little', signed=True)
                 self.data.emit(t10/10.0, h10/10.0)
-            
-            # 임계값 조회 응답(RF/RA/RH): int32(LE, 0.1단위) → 실수로 변환
             elif cmd in ('RF','RA','RH') and st == STATUS_OK and len(res) >= 7:
                 v10 = int.from_bytes(res[3:7], 'little', signed=True)
                 self.thr.emit(cmd, v10/10.0)
-            
-            #그 외 응답/에러는 로그용으로 신호 보냄
             else:
                 self.status.emit(cmd, st)
 
-class Win(QMainWindow, from_class):
-    def __init__(self):
-        super().__init__()
+# ===== PRESENCE(JSON) 리더 — 부재→재실만 지연 =====
+class ReceiverPresence(QThread):
+    presentChanged = pyqtSignal(bool)
+    status = pyqtSignal(str, int)
+
+    def __init__(self, conn, parent=None, hold_ms_present: int = 1000, hold_ms_absent: int = 1000):
+        """
+        hold_ms_present: '부재 -> 재실' 전환 지연(ms)
+        hold_ms_absent : '재실 -> 부재' 전환 지연(ms), 0이면 즉시
+        """
+        super().__init__(parent)
+        self.conn = conn
+        self._run = True
+        self._raw_prev = None           # 센서가 마지막으로 보고한 원시 상태
+        self._stable_present = None     # emit 된 안정 상태
+        self._last_change_ts = time.monotonic()
+        self._hold_ms_present = int(hold_ms_present)
+        self._hold_ms_absent  = int(hold_ms_absent)
+
+    def stop(self): self._run = False
+
+    @staticmethod
+    def _to_bool(v):
+        if isinstance(v, bool): return v
+        try: return bool(int(v))
+        except: return str(v).strip().lower() in ("true","t","yes","y","on")
+
+    def run(self):
+        while self._run:
+            if self.conn is None or not getattr(self.conn, "is_open", False):
+                break
+            try:
+                line = self.conn.readline()
+            except (serial.SerialException, OSError, TypeError):
+                self.status.emit("IO", 0xEF); break
+            if not line:
+                continue
+            try:
+                d = json.loads(line.decode("utf-8", "ignore").strip())
+            except Exception:
+                continue
+
+            blue = self._to_bool(d.get("blue", 0))
+            red  = self._to_bool(d.get("red",  0))
+            raw_present = not (blue and red)  # True=재실, False=부재
+
+            now = time.monotonic()
+            if raw_present != self._raw_prev:
+                self._raw_prev = raw_present
+                self._last_change_ts = now  # 상태 바뀐 시각
+
+            elapsed_ms = (now - self._last_change_ts) * 1000.0
+            required_ms = self._hold_ms_present if raw_present else self._hold_ms_absent
+
+            if elapsed_ms >= required_ms:
+                if raw_present != self._stable_present:
+                    self._stable_present = raw_present
+                    self.presentChanged.emit(raw_present)
+
+# ===== 메인 윈도우 =====
+class NextWindow(QMainWindow, from_class):
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.setupUi(self)
 
-        # 초기 UI: 자동 모드, 수동 버튼 비활성
+        # UI 핸들
+        self.statusLabel   = self._el(QLabel, "statusLabel", "label_2", "label")
+        self.label_elapsed = self._el(QLabel, "label__time", "label_time")
+        self.label_start   = self._el(QLabel, "label__time_2", "label_time_2")
+        self.label_end     = self._el(QLabel, "label__time_3", "label_time_3")
+        self.TempEdit      = self._el(QLineEdit, "TempEdit", "TempLineEdit", "lineEditTemp")
+        self.HumidEdit     = self._el(QLineEdit, "HumidEdit", "HumidLineEdit", "lineEditHumid")
+        self.checkAuto     = self._el(QCheckBox, "checkAuto", "checkBoxAuto")
+        self.btnFan        = self._el(QPushButton, "btnFan", "pushButtonFan")
+        self.btnAC         = self._el(QPushButton, "btnAC", "pushButtonAC")
+        self.btnHeat       = self._el(QPushButton, "btnHeat", "pushButtonHeat")
+        self.spinFan       = self._el(QDoubleSpinBox, "spinFan", "doubleSpinBoxFan")
+        self.spinAC        = self._el(QDoubleSpinBox, "spinAC", "doubleSpinBoxAC")
+        self.spinHeat      = self._el(QDoubleSpinBox, "spinHeat", "doubleSpinBoxHeat")
+
+        # 초기 UI 상태
+        self.time_fmt = "HH:mm:ss"
+        self.absent_start_dt = None
+        self.current_present = None
+        self.label_elapsed.setText("00:00")
+        self.label_start.setText("--:--:--")
+        self.label_end.setText("--:--:--")
+        self.set_present(True)
+
+        self._elapsed_timer = QtCore.QTimer(self)
+        self._elapsed_timer.timeout.connect(self.update_elapsed)
+        self._elapsed_timer.start(200)
+
+        for sb in (self.spinFan, self.spinAC, self.spinHeat):
+            sb.setDecimals(1); sb.setRange(-50.0, 100.0)
+            sb.setSingleStep(0.1); sb.setKeyboardTracking(False)
+
         self.checkAuto.setChecked(True)
         self._setManualEnabled(False)
 
-        # 스핀박스 기본 설정
-        for sb in (self.spinFan, self.spinAC, self.spinHeat):
-            sb.setDecimals(1)
-            sb.setRange(-50.0, 100.0)
-            sb.setSingleStep(0.1)
-            sb.setKeyboardTracking(False)
+        # 포트 열기
+        self.ser_env = None
+        self.ser_presence = None
+        self._open_ports()
 
-        # 시리얼 오픈 → 대기(안정화) → 입력버퍼 비우기(초기 쓰레기 바이트 제거를 위해 입력 버퍼 비움) 
-        self.ser = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
-        time.sleep(2.0)
-        self.ser.reset_input_buffer()
+        self.setWindowTitle(
+            f"Study Env - ENV: {getattr(self.ser_env,'port',None)} / PRES: {getattr(self.ser_presence,'port',None)}"
+        )
 
-        # 수신 스레드: start 전에 시그널 연결
-        self.rx = Receiver(self.ser)
-        self.rx.data.connect(self.onData)
-        self.rx.thr.connect(self.onThr)
-        self.rx.status.connect(self.onStatus)
-        self.rx.start()
+        # 스레드 시작
+        self.rx_env = None
+        if self.ser_env:
+            self.rx_env = ReceiverEnv(self.ser_env)
+            self.rx_env.data.connect(self.onData)
+            self.rx_env.thr.connect(self.onThr)
+            self.rx_env.start()
 
-        # UI 신호
+        self.rx_presence = None
+        if self.ser_presence:
+            # ★ 여기서 '부재→재실 2초 지연 / 재실→부재 즉시' 설정
+            self.rx_presence = ReceiverPresence(self.ser_presence, hold_ms_present=2000, hold_ms_absent=0)
+            self.rx_presence.presentChanged.connect(self.set_present)
+            self.rx_presence.start()
+
+        # 신호 연결
         self.checkAuto.toggled.connect(self.onAuto)
         self.btnFan.clicked.connect(self.onFan)
         self.btnAC.clicked.connect(self.onAC)
         self.btnHeat.clicked.connect(self.onHeat)
+        self.spinFan.valueChanged.connect(lambda v: self.send_env('SF', i10(v)))
+        self.spinAC.valueChanged.connect(lambda v: self.send_env('SA', i10(v)))
+        self.spinHeat.valueChanged.connect(lambda v: self.send_env('SH', i10(v)))
 
-        # 값 변경 → 쓰기 > (spinbox/버튼)
-        self.spinFan.valueChanged.connect(lambda v: self.send('SF', i10(v)))
-        self.spinAC.valueChanged.connect(lambda v: self.send('SA', i10(v)))
-        self.spinHeat.valueChanged.connect(lambda v: self.send('SH', i10(v)))
+        # ENV 폴링 및 초기 질의
+        if self.ser_env:
+            self.timer_env = QTimer(self); self.timer_env.setInterval(1000)
+            self.timer_env.timeout.connect(lambda: self.send_env('RD'))
+            QTimer.singleShot(800, self.timer_env.start)
+            QTimer.singleShot(200, lambda: self.send_env('SM', 1))
+            QTimer.singleShot(400, lambda: self.send_env('RF'))
+            QTimer.singleShot(500, lambda: self.send_env('RA'))
+            QTimer.singleShot(600, lambda: self.send_env('RH'))
 
-        # RD 타이머는 약간 지연해서 시작 (1초마다 RD(센서값 요청) 송신. 시작은 0.8초 지연(안정 후 전송))
-        self.timer = QTimer(self)
-        self.timer.setInterval(1000)
-        self.timer.timeout.connect(lambda: self.send('RD'))
-        QTimer.singleShot(800, self.timer.start)
-
-        # 초기 동기화
-        QTimer.singleShot(200, lambda: self.send('SM', 1))  # AUTO
-        QTimer.singleShot(400, lambda: self.send('RF'))     # Fan 임계
-        QTimer.singleShot(500, lambda: self.send('RA'))     # AC  임계
-        QTimer.singleShot(600, lambda: self.send('RH'))     # Heat 임계
+    # ---- 내부 유틸 ----
+    def _el(self, cls, *names):
+        for n in names:
+            w = getattr(self, n, None) or self.findChild(cls, n)
+            if w is not None: return w
+        raise RuntimeError(f"{cls.__name__}({', '.join(names)}) 를 .ui에서 찾지 못했습니다.")
 
     def _setManualEnabled(self, enabled: bool):
-        self.btnFan.setEnabled(enabled)
-        self.btnAC.setEnabled(enabled)
-        self.btnHeat.setEnabled(enabled)
+        self.btnFan.setEnabled(enabled); self.btnAC.setEnabled(enabled); self.btnHeat.setEnabled(enabled)
 
-    # 공통 송신: <2B CMD><4B DATA><'\n'>
-    def send(self, cmd2: str, data: int | None = None):
+    def _open_ports(self):
+        try:
+            self.ser_env = serial.Serial(PORT_ENV, BAUD, timeout=2)
+            time.sleep(1.2); self.ser_env.reset_input_buffer()
+        except Exception:
+            self.ser_env = None
+        try:
+            self.ser_presence = serial.Serial(PORT_PRESENCE, BAUD, timeout=1)
+            time.sleep(1.2); self.ser_presence.reset_input_buffer()
+        except Exception:
+            self.ser_presence = None
+
+    # ---- ENV 전송 ----
+    def send_env(self, cmd2: str, data: int | None = None):
+        if not self.ser_env or not self.ser_env.is_open: return
         pkt = bytearray(cmd2.encode('ascii'))
         pkt += (struct.pack('<i', int(data)) if data is not None else b'\x00\x00\x00\x00')
         pkt += b'\n'
-        self.ser.write(pkt)
+        try:
+            self.ser_env.write(pkt)
+        except serial.SerialException:
+            pass
 
-    # 수신 콜백
+    # ---- 슬롯 ----
     @pyqtSlot(float, float)
     def onData(self, t, h):
         self.TempEdit.setText(f"{t:.1f}")
         self.HumidEdit.setText(f"{h:.1f}")
-        
-    # 스핀박스에 초기 값 바인딩 시 불필요한 재전송 방지
+
     @pyqtSlot(str, float)
     def onThr(self, cmd, v):
         if cmd == 'RF':
@@ -134,31 +277,24 @@ class Win(QMainWindow, from_class):
         elif cmd == 'RH':
             self.spinHeat.blockSignals(True); self.spinHeat.setValue(v); self.spinHeat.blockSignals(False)
 
-    @pyqtSlot(str, int)
-    def onStatus(self, cmd, st):
-        print(f"{cmd} status=0x{st:02X}")
-
-    # 모드 토글
     def onAuto(self, checked: bool):
-        self.send('SM', 1 if checked else 0)
+        self.send_env('SM', 1 if checked else 0)
         self._setManualEnabled(not checked)
         if checked:
             self.btnFan.setText("FAN (AUTO)")
             self.btnAC.setText("A/C (AUTO)")
             self.btnHeat.setText("HEAT (AUTO)")
         else:
-            # 수동 진입 시 OFF 초기화 + 보드에 즉시 반영
             self.btnFan.setText("FAN: OFF")
             self.btnAC.setText("A/C: OFF")
             self.btnHeat.setText("HEAT: OFF")
-            self.send('SC', 0)
+            self.send_env('SC', 0)
 
-    # 수동 토글 핸들러
     def _send_mask(self):
         mask = (1 if "ON" in self.btnFan.text() else 0) \
              | ((1 if "ON" in self.btnAC.text()  else 0) << 1) \
              | ((1 if "ON" in self.btnHeat.text() else 0) << 2)
-        self.send('SC', mask)
+        self.send_env('SC', mask)
 
     def onFan(self):
         t = self.btnFan.text()
@@ -175,32 +311,56 @@ class Win(QMainWindow, from_class):
         self.btnHeat.setText("HEAT: OFF" if "ON" in t else "HEAT: ON")
         self._send_mask()
 
+    # ---- 상태/타이머 ----
+    def set_present(self, present: bool):
+        prev = self.current_present
+        self.current_present = present
+        now = QtCore.QDateTime.currentDateTime()
+
+        if present:
+            if prev is False:
+                self.label_end.setText(now.toString(self.time_fmt))
+            self.statusLabel.setText("재실")
+            self.statusLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.statusLabel.setStyleSheet(STYLE_PRESENT)
+            self.label_elapsed.setText("00:00")
+        else:
+            if prev is not False:
+                self.absent_start_dt = now
+                self.label_start.setText(now.toString(self.time_fmt))
+                self.label_end.setText("--:--:--")
+            self.statusLabel.setText("부재")
+            self.statusLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.statusLabel.setStyleSheet(STYLE_ABSENT)
+
+    def update_elapsed(self):
+        if self.current_present is False and self.absent_start_dt is not None:
+            secs = self.absent_start_dt.secsTo(QtCore.QDateTime.currentDateTime())
+            m, s = divmod(max(secs, 0), 60)
+            self.label_elapsed.setText(f"{m:02d}:{s:02d}")
+        else:
+            self.label_elapsed.setText("00:00")
+
+    # ---- 종료 정리 ----
     def closeEvent(self, e):
         try:
-            self.rx.stop()
-            self.rx.wait(800)
-            try:
-                self.ser.close()
-            except Exception:
-                pass
+            for th in (getattr(self, "rx_env", None), getattr(self, "rx_presence", None)):
+                try:
+                    if th and th.isRunning():
+                        th.stop(); th.wait(800)
+                except Exception:
+                    pass
+            for ser in (getattr(self, "ser_env", None), getattr(self, "ser_presence", None)):
+                try:
+                    if ser and ser.is_open: ser.close()
+                except Exception:
+                    pass
         finally:
             super().closeEvent(e)
 
-
+# ===== main =====
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    w = Win()
-    w.setWindowTitle("Temp/Humid Controller")
+    w = NextWindow()
     w.show()
     sys.exit(app.exec())
-
-
-class NextWindow(QMainWindow, from_class):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            try:
-                parent.close()
-            except Exception:
-                pass
-        self.setupUi(self)
