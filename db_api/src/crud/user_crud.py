@@ -7,6 +7,12 @@ def create_user(db: Session, user: user_schema.userCreate):
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+
+    db_user_setting = user_model.UserSetting(
+        name=user.name, 
+        bright=50, 
+        blind=45, 
+        window=45)
     return db_user
 
 def get_users(db: Session, limit: int = 100):
@@ -17,3 +23,13 @@ def get_user_by_uid(db: Session, uid:bytes):
 
 def get_user_setting_by_name(db: Session, name:str):
     return db.query(user_model.UserSetting).filter(user_model.UserSetting.name == name).first()
+
+def update_user_setting(db: Session, name:str, user_setting: user_schema.userSettingUpdate):
+    db_user_setting = get_user_setting_by_name(db, name=name)
+    if db_user_setting:
+        update_data = user_setting.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(db_user_setting, key, value)
+        db.commit()
+        db.refresh(db_user_setting)
+    return db_user_setting

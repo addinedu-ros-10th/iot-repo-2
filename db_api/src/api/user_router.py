@@ -65,3 +65,10 @@ def read_user_setting(name: str, db: Session = Depends(get_db)):
     if db_user_setting is None:
         raise HTTPException(status_code=404, detail="User setting not found")
     return db_user_setting
+
+@router.put("/users/setting/{name}", response_model=user_schema.userSetting, tags=["Users"])
+def update_user_setting(name: str, user_setting: user_schema.userSettingUpdate, db: Session = Depends(get_db)):
+    db_user_setting = user_crud.update_user_setting(db, name=name, user_setting=user_setting)
+    if db_user_setting is None:
+        raise HTTPException(status_code=404, detail="User setting not found")
+    return db_user_setting

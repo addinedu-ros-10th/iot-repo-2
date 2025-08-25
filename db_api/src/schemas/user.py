@@ -55,3 +55,8 @@ class userSetting(BaseModel):
     
     class Config:
         from_attributes = True
+
+class userSettingUpdate(BaseModel):
+    bright: int | None = None
+    blind: int | None = None
+    window: int | None = None

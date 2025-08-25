@@ -13,6 +13,25 @@ from card_enroll import CardEnrollApp, NotificationDialog
 
 from_class = uic.loadUiType("src/GUI/id.ui")[0]
 
+class UserSettingsReceiver(QThread):
+    settings_received = pyqtSignal(dict)
+
+    def __init__(self, name, parent=None):
+        super().__init__(parent)
+        self.name = name
+
+    def run(self):
+        try:
+            api_url = f"http://127.0.0.1:8000/users/setting/{self.name}"
+            response = requests.get(api_url, timeout=10)
+
+            if response.status_code == 200:
+                self.settings_received.emit(response.json())
+
+        except Exception as e:
+            print(f"Error : {e}")
+
+
 class apiReceiver(QThread):
     getUids = pyqtSignal(list)
 
@@ -69,10 +88,10 @@ class RfidReceiver(QThread):
                         self.detected.emit(res[3:7])
                     elif cmd == b'IG':
                         print('out tag detected(wrong)')
-                        # id1 = res[3:7]
-                        # id2 = res[7:11]
-                        # print(f"id1 : {id1.hex().upper()}")
-                        # print(f"id2 : {id2.hex().upper()}")
+                        id1 = res[3:7]
+                        id2 = res[7:11]
+                        print(f"id1 : {id1.hex().upper()}")
+                        print(f"id2 : {id2.hex().upper()}")
                     elif cmd == b'IZ':
                         print('out tag detected(pass)')
                     else:
@@ -85,7 +104,7 @@ class RfidReceiver(QThread):
 
 
 class WindowClass(QMainWindow, from_class):
-    def __init__(self):
+    def __init__(self, conn=None):
         super().__init__()
         self.setupUi(self)
 
@@ -99,9 +118,13 @@ class WindowClass(QMainWindow, from_class):
         self.apiReceiver = None
         self.conn = None
         self.enroll_window = None
+        self.settingRecv = None
 
         try:
-            self.conn = serial.Serial(port="/dev/ttyACM0", baudrate=9600, timeout=1)
+            if conn is None: 
+                self.conn = serial.Serial(port="/dev/cu.usbmodem11301", baudrate=9600, timeout=1)
+            else:
+                self.conn = conn
             self.rfid_worker = RfidReceiver(self.conn)
             self.rfid_worker.detected.connect(self.handle_rfid_detection)
             self.rfid_worker.start()
@@ -142,7 +165,7 @@ class WindowClass(QMainWindow, from_class):
 
     def getDBResult(self, resultList):
         if resultList[0] != "error":
-            user_name = resultList[0]['name']
+            self.user_name = resultList[0]['name']
 
             # 사용자의 모든 uid 보내기
             uids = b''
@@ -152,11 +175,25 @@ class WindowClass(QMainWindow, from_class):
             self.send(b'IB', status=0x00, data=uids)
             print(uids.hex().upper())
 
-            self.tLabel.setText(f"{user_name}님, 환영합니다!")
+            self.tLabel.setText(f"{self.user_name}님, 환영합니다!")
+
+            self.settingRecv = UserSettingsReceiver(self.user_name)
+            self.settingRecv.settings_received.connect(self.save_user_settings)
+            self.settingRecv.start()
+
+            QTimer.singleShot(1000, self.openNewWindow)
+
         else:
             self.send(b'IB', status=0xA1, data = b'\x00' * 8)
             if (resultList[1] == "404"):
                 self.tLabel.setText(f"등록되지 않은 사용자입니다.")
+
+            QTimer.singleShot(1000, lambda: self.tLabel.setText("RFID 태그를 스캔하세요."))
+
+    def save_user_settings(self, settings):
+        print(f"Received user settings: {settings}")
+        settings['name'] = self.user_name
+        self.user_settings = settings
 
     def send(self, command, status, data):
         req_data = struct.pack('<2sB8sc', command, status, data, b'\n')
@@ -166,14 +203,22 @@ class WindowClass(QMainWindow, from_class):
 
     def openNewWindow(self):
         if self.new_window is None:
-            self.new_window = NextWindow(self)
+            self.new_window = NextWindow(self, settings=self.user_settings, conn = self.conn)
         
         self.new_window.show()
+        self.conn = None
+        self.close()
 
     def closeEvent(self, event):
         if self.rfid_worker and self.rfid_worker.isRunning():
             self.rfid_worker.stop()
             self.rfid_worker.wait()
+        if self.settingRecv and self.settingRecv.isRunning():
+            self.settingRecv.stop()
+            self.settingRecv.wait()
+        if self.apiReceiver and self.apiReceiver.isRunning():
+            self.apiReceiver.stop()
+            self.apiReceiver.wait()
         if self.conn and self.conn.is_open:
             self.conn.close()
         super().closeEvent(event)
