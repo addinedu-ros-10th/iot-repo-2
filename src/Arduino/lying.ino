@@ -3,9 +3,14 @@
 
 #define DHTPIN   A0
 
+<<<<<<< HEAD
 
 int sensorPin = A0;    // 적외선 센서의 신호핀 연결       // LED 출력핀
 int sensorValue = 0; 
+=======
+int sensorPin = A0;     
+int sensorValue = 0;
+>>>>>>> b01e3893d893b05ce4c0c451c0350d14338d974b
 int buzzerPin = 2;
 
 
@@ -15,7 +20,11 @@ void setup() {
   Serial.begin(9600);
 }
 
+<<<<<<< HEAD
 void loop() 
+=======
+void loop()
+>>>>>>> b01e3893d893b05ce4c0c451c0350d14338d974b
 {
   sensorValue = analogRead(sensorPin);
   // Serial.println(sensorValue);
@@ -28,7 +37,11 @@ void loop()
     Serial.println(sensorValue);  // 센서 값 전송
     buzzerState = true;
     delay(500);                   // 0.5초마다 전송
+<<<<<<< HEAD
     
+=======
+
+>>>>>>> b01e3893d893b05ce4c0c451c0350d14338d974b
   }
   else
   {
@@ -41,9 +54,13 @@ void loop()
     Serial.println(buzzerState ? 1 : 0);
 
     delay(500);
+<<<<<<< HEAD
 }
 
 
 
 
 
+=======
+}
+>>>>>>> b01e3893d893b05ce4c0c451c0350d14338d974b
