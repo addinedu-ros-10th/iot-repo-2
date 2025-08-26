@@ -16,7 +16,7 @@ BAUD = 9600
 
 # ===== UI 로드(동일 폴더) =====
 #from_class = uic.loadUiType("/home/geonchang/dev_ws/iot-repo-2/src/GUI/study_env.ui")[0]
-from_class = uic.loadUiType("/home/dj/dev_ws/iot_project/src/GUI/study_env.ui")[0]
+from_class = uic.loadUiType("src/GUI/study_env.ui")[0]
 
 def i10(v: float) -> int:
     return int(round(float(v)*10.0))
@@ -537,7 +537,6 @@ class NextWindow(QMainWindow, from_class):
                 self.windowConditioningModeBtn.setText("환기 모드 실행")
             else:
                 self.windowConditioningModeBtn.setText("환기 모드 중지")
-                self.conn_bw.write("wo".encode())
                 self.labelWindowDeg.setDisabled(True)
                 self.windowDial.setDisabled(True)
                 self.windowCloseBtn.setDisabled(True)
@@ -545,7 +544,6 @@ class NextWindow(QMainWindow, from_class):
                 self.isWindowConditioningModeControl = True
         else:
             self.windowConditioningModeBtn.setText("환기 모드 실행")
-            self.conn_bw.write("wf".encode())
             self.windowCloseControl()
             self.labelWindowDeg.setEnabled(True)
             self.windowDial.setEnabled(True)
