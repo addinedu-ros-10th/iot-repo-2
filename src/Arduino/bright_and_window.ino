@@ -19,9 +19,11 @@ int led_light_desired = 0;
 int led_light_desired_mapped;
 int led_light_actual = 0;
 
-int window_conditioning_time = 0;
+const int window_conditioning_time_default = 2000;
+int window_conditioning_time = window_conditioning_time_default;
+
 int window_conditioning_angle = 0;
-int window_conditioning_open_angle = 60;
+int window_conditioning_open_angle = 40;
 int window_conditioning_close_angle = 0;
 
 bool is_window_conditioning_mode = false;
@@ -54,6 +56,8 @@ void serialLoop()
           if (is_window_conditioning_mode == true)
           {
             is_window_conditioning_mode = false;
+            is_window_conditioning_open = false;
+            window_conditioning_time = window_conditioning_time_default;
           }
 
           String servo_order = string_recv.substring(2, length);
@@ -190,6 +194,28 @@ void controlWindowConditioning()
       window_conditioning_time++;
     }
   }
+  /*if (is_window_conditioning_open == false)
+  {
+    if (window_conditioning_time > 2000)
+    {
+      controlWindow(window_conditioning_open_angle);
+    }
+    else
+    {
+      window_conditioning_time++;
+    }
+  }
+  else
+  {
+    if (window_conditioning_time > 500)
+    {
+      controlWindow(window_conditioning_close_angle);
+    }
+    else
+    {
+      window_conditioning_time++;
+    }
+  }*/
   
 }
 

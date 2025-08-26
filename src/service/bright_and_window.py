@@ -16,7 +16,7 @@ class WindowClass(QMainWindow, from_class):
         self.setupUi(self)
 
         self.uid = bytes(4)
-        self.conn = serial.Serial(port = "/dev/ttyACM1", baudrate = 9600, timeout = 1)
+        self.conn = serial.Serial(port = "/dev/ttyACM0", baudrate = 9600, timeout = 1)
         self.recv = Receiver(self.conn) # Gui 시작 시 스레드 시작
         self.recv.start()
 
