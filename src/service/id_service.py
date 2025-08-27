@@ -111,7 +111,7 @@ class WindowClass(QMainWindow, from_class):
         self.new_window = None
         self.tLabel.setText("RFID 태그를 스캔하세요.")
 
-        self.nwBtn.clicked.connect(self.openNewWindow)
+        # self.nwBtn.clicked.connect(self.openNewWindow)
         self.enrollBtn.clicked.connect(self.open_enroll_window)
 
         # DB 스레드를 담아둘 변수. None으로 초기화.
@@ -122,7 +122,7 @@ class WindowClass(QMainWindow, from_class):
 
         try:
             if conn is None: 
-                self.conn = serial.Serial(port="/dev/cu.usbmodem11301", baudrate=9600, timeout=1)
+                self.conn = serial.Serial(port="/dev/ttyACM4", baudrate=9600, timeout=1)
             else:
                 self.conn = conn
             self.rfid_worker = RfidReceiver(self.conn)
@@ -131,7 +131,7 @@ class WindowClass(QMainWindow, from_class):
         except serial.SerialException as e:
             self.tLabel.setText(f"시리얼 포트 오류: {e}")
         
-        self.outBtn.clicked.connect(self.tryOut)
+        # self.outBtn.clicked.connect(self.tryOut)
 
     def open_enroll_window(self):
         if self.enroll_window is None:
@@ -203,11 +203,16 @@ class WindowClass(QMainWindow, from_class):
 
     def openNewWindow(self):
         if self.new_window is None:
+            if self.rfid_worker and self.rfid_worker.isRunning():
+                self.rfid_worker.stop()
+                self.rfid_worker.wait()
+
             self.new_window = NextWindow(self, settings=self.user_settings, conn = self.conn)
         
         self.new_window.show()
-        self.conn = None
-        self.close()
+        # self.conn = None
+        # self.close()
+        self.hide()
 
     def closeEvent(self, event):
         if self.rfid_worker and self.rfid_worker.isRunning():

@@ -139,6 +139,7 @@ class CardEnrollApp(QDialog, from_class):
 
     def on_registration_complete(self, name, uid):
         QMessageBox.information(self, "등록 완료", f"이름: {name}님의 카드가 성공적으로 등록되었습니다.")
+        self.send_packet("IT", 0x00)
         self.nameEdit.clear()
 
         self.close()
