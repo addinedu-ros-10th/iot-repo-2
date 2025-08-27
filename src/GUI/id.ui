@@ -29,17 +29,17 @@
     <set>Qt::AlignCenter</set>
    </property>
   </widget>
-  <widget class="QPushButton" name="nwBtn">
+  <widget class="QPushButton" name="enrollBtn">
    <property name="geometry">
     <rect>
-     <x>180</x>
+     <x>240</x>
      <y>310</y>
-     <width>261</width>
+     <width>161</width>
      <height>41</height>
     </rect>
    </property>
    <property name="text">
-    <string>새 창 열기</string>
+    <string>새로 등록</string>
    </property>
   </widget>
  </widget>

@@ -4,19 +4,32 @@ from PyQt6.QtCore import *
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
 
-# ===== 고정 포트 경로 =====
-PORT_ENV      = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266422712165-if00"  # (원래 PRES)
-PORT_PRESENCE = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266417512681-if00"  # (원래 ENV)
-# PORT_ENV      = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12424551266429728000-if00"  # (lying)
-# PORT_PRESENCE = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12424551266429728000-if00"  # (lying)
+import serial
+import struct
+import requests
 
+# from id_service import WindowClass
+from card_enroll import CardEnrollApp, NotificationDialog
+
+# ===== 고정 포트 경로 (by-id로 고정) =====
+# ENV(이진 프레임: RD/RF/RA/RH) ← 원래 PRES 라고 주석 달려있던 그 보드
+PORT_ENV      = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266422712165-if00"  # -> ttyACM2
+# PRESENCE(JSON) ← 원래 ENV 라고 주석 달려있던 그 보드
+PORT_PRESENCE = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266417512681-if00"  # -> ttyACM3
+
+# 초음파/버저 보드(기존 /dev/ttyACM0)
+ULTRA_PORT    = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12424551266429728000-if00"  # -> ttyACM0
+# 조명/블라인드/창문 보드(기존 /dev/ttyACM1)
+ACTUATOR_PORT = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12624551266418312381-if00"  # -> ttyACM1
+
+RFID_PORT     = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_Uno_12748509806174208640-if00"  # -> ttyACM4
 
 
 BAUD = 9600
 
 # ===== UI 로드(동일 폴더) =====
 #from_class = uic.loadUiType("/home/geonchang/dev_ws/iot-repo-2/src/GUI/study_env.ui")[0]
-from_class = uic.loadUiType("/home/dj/dev_ws/iot_project/src/GUI/study_env.ui")[0]
+from_class = uic.loadUiType("src/GUI/study_env.ui")[0]
 
 def i10(v: float) -> int:
     return int(round(float(v)*10.0))
@@ -32,6 +45,74 @@ STYLE_ABSENT = (
     "QLabel{background:#fbbf24;color:#111;border-radius:24px;"
     "padding:16px 24px;font-weight:800;font-size:48px;}"
 )
+
+class apiReceiver(QThread):
+    result = pyqtSignal()
+
+    def __init__(self, name, bright, blind, window, parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.bright = bright
+        self.blind = blind
+        self.window = 0
+
+    def run(self):
+        try:
+            api_url = f"http://127.0.0.1:8000/users/setting/{self.name}"
+
+            data = {'bright': self.bright, 'blind': self.blind, 'window': self.window}
+
+            response = requests.put(api_url, json=data, timeout=10)
+            status_code = str(response.status_code)
+            # response.raise_for_status()
+
+            if status_code.startswith("2"):
+
+                self.result.emit()
+
+        except Exception as e:
+            print(f"Error : {e}")
+
+
+class RfidReceiver(QThread):
+    detected = pyqtSignal(bytes)
+    exit = pyqtSignal()
+
+    def __init__(self, conn, parent=None):
+        super(RfidReceiver, self).__init__(parent)
+        self.is_running = False
+        self.conn = conn
+        print("RFID receiver init")
+
+    def run(self):
+        print("RFID receiver start")
+        self.is_running = True
+        while (self.is_running):
+            if self.conn and self.conn.is_open and self.conn.readable():
+                res = self.conn.read_until(b'\n')
+                if len(res) > 0:
+                    cmd = res[:2]
+                    print(f"res : {res}")
+                    print(len(res))
+                    if cmd == b'IA':
+                        print('message detected')
+                        self.detected.emit(res[3:7])
+                    elif cmd == b'IG':
+                        print('out tag detected(wrong)')
+                        # id1 = res[3:7]
+                        # id2 = res[7:11]
+                        # print(f"id1 : {id1.hex().upper()}")
+                        # print(f"id2 : {id2.hex().upper()}")
+                    elif cmd == b'IZ':
+                        print('out tag detected(pass)')
+                        self.exit.emit()
+                    else:
+                        print('unknown')
+                        print(f"cmd : {cmd}")
+
+    def stop(self):
+        print("RFID receiver stop")
+        self.is_running = False
 
 # ===== ENV(바이너리 프레임) 리더 =====
 class ReceiverEnv(QThread):
@@ -152,7 +233,7 @@ class ReceiverPresence(QThread):
 
 # ===== 메인 윈도우 =====
 class NextWindow(QMainWindow, from_class):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None, conn=None):
         super().__init__(parent)
         self.setupUi(self)
 
@@ -182,12 +263,13 @@ class NextWindow(QMainWindow, from_class):
         self.label_15.setStyleSheet("color: black;font-weight: bold")
 
         # +++ 조명/창문 작동 패러미터 +++
-        self.brightSavedValue = 50 #정보가 저장되어야 하는 값
-        self.blindSavedValue = 45 #정보가 저장되어야 하는 값
-        self.windowSavedValue = 45 #정보가 저장되어야 하는 값
+        self.brightSavedValue = settings['bright']#50 #정보가 저장되어야 하는 값
+        print(f"self.brightSavedValue : {self.brightSavedValue}")
+        self.blindSavedValue = settings['blind']#45 #정보가 저장되어야 하는 값
+        self.windowSavedValue = 0 #45 #정보가 저장되어야 하는 값
 
-        self.initBright = 0 # 조명 초기화 값
-        self.initBlindAngle = 0 # 블라인드 초기화 값
+        self.initBright = settings['bright'] # 조명 초기화 값
+        self.initBlindAngle = settings['blind'] # 블라인드 초기화 값
         self.initWindowAngle = 0 # 창문 초기화 값
 
         bright_min = self.brightSlider.minimum()
@@ -232,13 +314,15 @@ class NextWindow(QMainWindow, from_class):
         self.windowDial.valueChanged.connect(self.windowControl)
         self.windowConditioningModeBtn.clicked.connect(self.windowConditioningModeControl)
         self.windowCloseBtn.clicked.connect(self.windowCloseControl)
-        # +++ 조명/창문 작동 패러미터 +++
 
-        self.conn = \
-            serial.Serial(port= "/dev/ttyACM0", baudrate= 9600 , timeout=1) # 근접센서용 
+        # # +++ 조명/창문 작동 패러미터 +++
+        self.conn    = self._open_serial_safe(ULTRA_PORT,    baud=9600, timeout=1)  # 초음파/버저
+        self.conn_bw = self._open_serial_safe(ACTUATOR_PORT, baud=9600, timeout=1)  # 조명/블라인드/창문
         
-        self.conn_bw = \
-            serial.Serial(port= "/dev/ttyACM1", baudrate= 9600 , timeout=1) # 조명/창문 조정용
+        if conn is None:
+            self.conn_rfid = self._open_serial_safe(RFID_PORT, baud=9600, timeout=1)
+        else:
+            self.conn_rfid = conn
         
         self.initSettings()
         
@@ -312,6 +396,118 @@ class NextWindow(QMainWindow, from_class):
             QTimer.singleShot(400, lambda: self.send_env('RF'))
             QTimer.singleShot(500, lambda: self.send_env('RA'))
             QTimer.singleShot(600, lambda: self.send_env('RH'))
+
+        self.new_window = None
+        self.APIRecv = None
+
+        self.name = settings['name']
+        self.bright = settings['bright']
+        self.blind = settings['blind']
+        self.windows = settings['window']
+
+        # self.conn = serial.Serial(port="/dev/cu.usbmodem11301", baudrate=9600, timeout=1)
+        # self.conn = conn
+        self.outBtn.clicked.connect(self.tryOut)
+
+        self.RFIDRecv = RfidReceiver(self.conn_rfid)
+        self.RFIDRecv.exit.connect(self.save_setting_values)
+        self.RFIDRecv.start()
+        print(f"User settings in NextWindow: {settings}")
+        self.dialog_shown = False
+
+    def tryOut(self):
+        self.scan_dialog = NotificationDialog(f"카드를 리더기에 태그해주세요.", self)
+
+        self.send(b'IY', 0x00, b'\x00'*8)
+
+        self.scan_dialog.exec()
+
+    def send(self, command, status, data):
+        req_data = struct.pack('<2sB8sc', command, status, data, b'\n')
+        self.conn_rfid.write(req_data)
+        print("send")
+        return
+    
+    def save_setting_values(self):
+        # from id_service import WindowClass
+
+        self.APIRecv = apiReceiver(self.name, self.brightSavedValue, self.blindSavedValue, self.windowSavedValue)
+        self.APIRecv.result.connect(self.open_rfid_window)
+        self.APIRecv.start()
+
+        # if self.new_window is None:
+        #     self.new_window = WindowClass(conn = self.conn)
+        # self.new_window.show()
+        # self.conn = None
+        # self.scan_dialog.close()
+        # self.close()
+    
+    def save_setting_values2(self):
+        # from id_service import WindowClass
+
+        self.APIRecv = apiReceiver(self.name, self.brightSavedValue, self.blindSavedValue, self.windowSavedValue)
+        self.APIRecv.result.connect(self.open_rfid_window2)
+        self.APIRecv.start()
+
+    def open_rfid_window(self):
+        QMessageBox.information(self, "Success", f"{self.name}님, 안녕히 가세요")
+
+        from id_service import WindowClass
+
+        if self.APIRecv and self.APIRecv.isRunning():
+            self.APIRecv.stop()
+            self.APIRecv.wait()
+        if self.RFIDRecv and self.RFIDRecv.isRunning():
+            self.RFIDRecv.stop()
+            self.RFIDRecv.wait()
+
+        self.brightOffControl()
+        time.sleep(2)
+        self.blindCloseControl()
+        time.sleep(2)
+        self.windowCloseControl()
+        time.sleep(2)
+
+        if self.new_window is None:
+            self.new_window = WindowClass(conn = self.conn_rfid)
+        self.new_window.show()
+        self.conn_rfid = None
+        self.scan_dialog.close()
+        self.close()
+
+    def open_rfid_window2(self):
+        QMessageBox.information(self, "Success", f"부재 중인 시간이 일정 시간을 초과하여 퇴실처리 됩니다.")
+
+        from id_service import WindowClass
+
+        if self.APIRecv and self.APIRecv.isRunning():
+            self.APIRecv.stop()
+            self.APIRecv.wait()
+        if self.RFIDRecv and self.RFIDRecv.isRunning():
+            self.RFIDRecv.stop()
+            self.RFIDRecv.wait()
+
+        # self.brightOffControl()
+        # self.blindCloseControl()
+        # self.windowCloseControl()
+
+        if self.new_window is None:
+            self.new_window = WindowClass(conn = self.conn_rfid)
+        self.new_window.show()
+        self.conn_rfid = None
+        self.end_dialog.close()
+        self.close()
+
+    @staticmethod
+    def _open_serial_safe(path, baud=9600, timeout=1.0):
+        try:
+            ser = serial.Serial(path, baudrate=baud, timeout=timeout)
+            time.sleep(1.2)  # 아두이노 리셋 대기
+            ser.reset_input_buffer()
+            return ser
+        except Exception as e:
+            print(f"[SER] open fail {path} -> {e}")
+        return None
 
     # ---- 내부 유틸 ----
     def read_sensor_data(self):
@@ -426,6 +622,7 @@ class NextWindow(QMainWindow, from_class):
             self.statusLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             self.statusLabel.setStyleSheet(STYLE_PRESENT)
             self.label_elapsed.setText("00:00")
+            self.dialog_shown = False
         else:
             if prev is not False:
                 self.absent_start_dt = now
@@ -440,8 +637,16 @@ class NextWindow(QMainWindow, from_class):
             secs = self.absent_start_dt.secsTo(QtCore.QDateTime.currentDateTime())
             m, s = divmod(max(secs, 0), 60)
             self.label_elapsed.setText(f"{m:02d}:{s:02d}")
+
+            # if secs >= 10 and not self.dialog_shown:
+            #     self.on_absent_over_10s()
+            #     self.dialog_shown = True
         else:
             self.label_elapsed.setText("00:00")
+
+    def on_absent_over_10s(self):
+        self.end_dialog = NotificationDialog(f"부재 시간이 30분을 초과하여 전원이 OFF 됩니다.", self)
+        self.save_setting_values2()
 
     # ---- 종료 정리 ----
     def closeEvent(self, e):
@@ -463,9 +668,10 @@ class NextWindow(QMainWindow, from_class):
     # +++ 조명/창문 작동 함수 일람 +++
     def initSettings(self): # 등화, 서보모터 초기 설정
         if self.isInit == True:
-            self.brightControl()
-            time.sleep(2)
+            time.sleep(2)   
             self.blindControl()
+            time.sleep(2)
+            self.brightControl()
             time.sleep(2)
             self.windowControl()
             self.windowConditioningModeControl()
@@ -480,7 +686,11 @@ class NextWindow(QMainWindow, from_class):
         self.brightControl()
 
     def brightControl(self): # 조명 작동
-        if (self.isInit == True) or (self.isBrightOffControl == True):
+        if (self.isInit == True):
+            set_value = self.initBright
+            self.brightSlider.setValue(set_value)
+
+        elif (self.isBrightOffControl == True):
             set_value = self.brightSlider.minimum()
             self.brightSlider.setValue(set_value)
             self.isBrightOffControl = False
@@ -509,14 +719,20 @@ class NextWindow(QMainWindow, from_class):
         self.blindControl()
 
     def blindControl(self): # 블라인드 작동
-        if (self.isInit == True) or (self.isBlindOffControl == True):
+        if (self.isInit == True):
             set_value = self.initBlindAngle
             self.blindDial.setValue(set_value)
+
+        elif (self.isBlindOffControl == True):
+            set_value = self.blindDial.minimum()
+            self.blindDial.setValue(set_value)
             self.isBlindOffControl = False
+
         elif self.isBlindSavedSetControl == True:
             set_value = self.blindSavedValue
             self.blindDial.setValue(set_value)
             self.isBlindSavedSetControl = False
+
         else:
             set_value = self.blindDial.value()
             self.blindSavedValue = set_value
@@ -537,7 +753,6 @@ class NextWindow(QMainWindow, from_class):
                 self.windowConditioningModeBtn.setText("환기 모드 실행")
             else:
                 self.windowConditioningModeBtn.setText("환기 모드 중지")
-                self.conn_bw.write("wo".encode())
                 self.labelWindowDeg.setDisabled(True)
                 self.windowDial.setDisabled(True)
                 self.windowCloseBtn.setDisabled(True)
@@ -545,7 +760,6 @@ class NextWindow(QMainWindow, from_class):
                 self.isWindowConditioningModeControl = True
         else:
             self.windowConditioningModeBtn.setText("환기 모드 실행")
-            self.conn_bw.write("wf".encode())
             self.windowCloseControl()
             self.labelWindowDeg.setEnabled(True)
             self.windowDial.setEnabled(True)
